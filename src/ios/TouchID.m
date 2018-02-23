@@ -6,9 +6,9 @@
  to you under the Apache License, Version 2.0 (the
  "License"); you may not use this file except in compliance
  with the License.  You may obtain a copy of the License at
-
+ 
  http://www.apache.org/licenses/LICENSE-2.0
-
+ 
  Unless required by applicable law or agreed to in writing,
  software distributed under the License is distributed on an
  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -24,6 +24,8 @@
 
 @implementation TouchID
 
+static NSString *const FingerprintDatabaseStateKey = @"FingerprintDatabaseStateKey";
+
 - (void)isAvailable:(CDVInvokedUrlCommand*)command{
     self.laContext = [[LAContext alloc] init];
     BOOL touchIDAvailable = [self.laContext canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:nil];
@@ -32,18 +34,18 @@
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
     }
     else{
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: @"Touch ID not available"];
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: @"Touch ID not availalbe"];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
     }
 }
 
 - (void)setLocale:(CDVInvokedUrlCommand*)command{
-  CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
-  [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
 - (void)has:(CDVInvokedUrlCommand*)command{
-  	self.TAG = (NSString*)[command.arguments objectAtIndex:0];
+    self.TAG = (NSString*)[command.arguments objectAtIndex:0];
     BOOL hasLoginKey = [[NSUserDefaults standardUserDefaults] boolForKey:self.TAG];
     if(hasLoginKey){
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
@@ -56,7 +58,7 @@
 }
 
 - (void)save:(CDVInvokedUrlCommand*)command{
-	 	self.TAG = (NSString*)[command.arguments objectAtIndex:0];
+    self.TAG = (NSString*)[command.arguments objectAtIndex:0];
     NSString* password = (NSString*)[command.arguments objectAtIndex:1];
     @try {
         self.MyKeychainWrapper = [[KeychainWrapper alloc]init];
@@ -64,7 +66,7 @@
         [self.MyKeychainWrapper writeToKeychain];
         [[NSUserDefaults standardUserDefaults]setBool:true forKey:self.TAG];
         [[NSUserDefaults standardUserDefaults]synchronize];
-
+        
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
     }
@@ -75,16 +77,8 @@
 }
 
 -(void)delete:(CDVInvokedUrlCommand*)command{
-	 	self.TAG = (NSString*)[command.arguments objectAtIndex:0];
+    self.TAG = (NSString*)[command.arguments objectAtIndex:0];
     @try {
-
-        if(self.TAG && [[NSUserDefaults standardUserDefaults] objectForKey:self.TAG])
-        {
-            self.MyKeychainWrapper = [[KeychainWrapper alloc]init];
-            [self.MyKeychainWrapper resetKeychainItem];
-        }
-
-
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:self.TAG];
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
@@ -93,36 +87,75 @@
         CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: @"Could not delete password from chain"];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
     }
-
-
+    
+    
 }
 
 -(void)verify:(CDVInvokedUrlCommand*)command{
-	 	self.TAG = (NSString*)[command.arguments objectAtIndex:0];
-	  NSString* message = (NSString*)[command.arguments objectAtIndex:1];
+    
+    // First check if fingerprintenrollment has changed
+    LAContext *laContext = [[LAContext alloc] init];
+    NSError *error = nil;
+    
+    // we expect the dev to have checked 'isAvailable' already so this should not return an error,
+    // we do however need to run canEvaluatePolicy here in order to get a non-nil evaluatedPolicyDomainState
+    if (![laContext canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&error]) {
+        [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:[error localizedDescription]] callbackId:command.callbackId];
+        return;
+    }
+    
+    // only supported on iOS9, so check this.. if not supported just report back as false
+    if (![laContext respondsToSelector:@selector(evaluatedPolicyDomainState)]) {
+        [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsBool:NO] callbackId:command.callbackId];
+        return;
+    }
+    
+    NSData * state = [laContext evaluatedPolicyDomainState];
+    
+    if (state != nil) {
+        NSString * stateStr = [state base64EncodedStringWithOptions:0];
+        NSString * storedState = [[NSUserDefaults standardUserDefaults] stringForKey:FingerprintDatabaseStateKey];
+        
+        // whenever a finger is added/changed/removed the value of the storedState changes,
+        // so compare agains a value we previously stored in the context of this app
+        BOOL changed = storedState != nil && ![stateStr isEqualToString:storedState];
+        
+        // Store enrollment
+        [[NSUserDefaults standardUserDefaults] setObject:stateStr forKey:FingerprintDatabaseStateKey];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        
+        if (changed) {
+            CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: @"KeyPermanentlyInvalidatedException"];
+            [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+            return;
+        }
+    }
+    
+    self.TAG = (NSString*)[command.arguments objectAtIndex:0];
+    NSString* message = (NSString*)[command.arguments objectAtIndex:1];
     self.laContext = [[LAContext alloc] init];
     self.MyKeychainWrapper = [[KeychainWrapper alloc]init];
-
+    
     BOOL hasLoginKey = [[NSUserDefaults standardUserDefaults] boolForKey:self.TAG];
     if(hasLoginKey){
         BOOL touchIDAvailable = [self.laContext canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:nil];
-
+        
         if(touchIDAvailable){
             [self.laContext evaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics localizedReason:message reply:^(BOOL success, NSError *error) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-
-                if(success){
-                    NSString *password = [self.MyKeychainWrapper myObjectForKey:@"v_Data"];
-                    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString: password];
-                    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
-                }
-                if(error != nil) {
-                    CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: [NSString stringWithFormat:@"%li", error.code]];
-                    [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
-                }
+                    
+                    if(success){
+                        NSString *password = [self.MyKeychainWrapper myObjectForKey:@"v_Data"];
+                        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString: password];
+                        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+                    }
+                    if(error != nil) {
+                        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: [NSString stringWithFormat:@"%li", error.code]];
+                        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+                    }
                 });
             }];
-
+            
         }
         else{
             CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: @"-1"];
@@ -130,8 +163,8 @@
         }
     }
     else{
-           CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: @"-1"];
-            [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: @"-1"];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
     }
 }
 @end
