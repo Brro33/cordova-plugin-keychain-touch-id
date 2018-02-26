@@ -93,7 +93,7 @@ static NSString *const FingerprintDatabaseStateKey = @"FingerprintDatabaseStateK
 
 -(void)verify:(CDVInvokedUrlCommand*)command{
     
-    // First check if fingerprintenrollment has changed
+    // First check if fingerprint enrollment has changed
     LAContext *laContext = [[LAContext alloc] init];
     NSError *error = nil;
     
